@@ -5,3 +5,5 @@ pandas
 matplotlib
 transformers
 torch
+finance-datareader
+plotly
