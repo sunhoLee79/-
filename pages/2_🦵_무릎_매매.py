@@ -24,7 +24,7 @@ except ImportError:
 plt.rc('axes', unicode_minus=False)
 
 st.title("🦵 무릎 매매 스캐너 ")
-st.caption("시가총액 상위 종목을 자동 분석하여 매매 타점을 제시합니다.")
+st.caption("AI가 왜 이 종목을 추천했는지 '점수 산출 근거'를 투명하게 공개합니다.")
 
 # ---------------------------------------------------------
 # 1. 데이터 수집 함수
@@ -65,13 +65,13 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ---------------------------------------------------------
-# 2. 분석 로직
+# 2. 분석 로직 (점수 근거 기록 추가)
 # ---------------------------------------------------------
 def analyze_stocks(stock_list):
     results = []
     exchange_rate = get_exchange_rate()
     
-    progress_text = "데이터 수집 및 정밀 분석 중... (매수가/손절가 계산)"
+    progress_text = "데이터 수집 및 정밀 분석 중... (점수 근거 산출)"
     my_bar = st.progress(0, text=progress_text)
     
     total = len(stock_list)
@@ -106,23 +106,48 @@ def analyze_stocks(stock_list):
             disparity = ((curr_price - curr_ma20) / curr_ma20) * 100
             
             score = 0
+            reasons = [] # 점수 근거를 담을 리스트
             
-            # [점수 로직]
+            # --- [채점표] ---
+            
+            # 1. 추세 (Trend)
             if curr_ma20 > curr_ma60: 
                 score += 30
-                if curr_ma20 > prev_ma20: score += 10
-            else: score -= 20
+                reasons.append("✅ 정배열 추세 (20일>60일) [+30점]")
+                if curr_ma20 > prev_ma20: 
+                    score += 10
+                    reasons.append("✅ 20일선 상승 각도 좋음 [+10점]")
+            else:
+                score -= 20
+                reasons.append("⚠️ 역배열 (하락 추세) [-20점]")
             
+            # 2. 위치 (Position)
             if curr_price >= curr_ma20:
-                if disparity <= 3.0: score += 40
-                elif disparity <= 6.0: score += 20
-                else: score += 5
-            else: score -= 30
+                if disparity <= 3.0: 
+                    score += 40
+                    reasons.append("🦵 완벽한 무릎 (20일선 초근접) [+40점]")
+                elif disparity <= 6.0: 
+                    score += 20
+                    reasons.append("👌 매수 적정 구간 (이격도 양호) [+20점]")
+                else: 
+                    score += 5
+                    reasons.append("😅 다소 높은 위치 (이격도 큼) [+5점]")
+            else:
+                score -= 30
+                reasons.append("🚫 20일선 붕괴 (위험) [-30점]")
                 
+            # 3. 보조지표 (RSI)
             rsi = calculate_rsi(close).iloc[-1]
-            if 30 <= rsi <= 60: score += 20
+            if 35 <= rsi <= 65: 
+                score += 20
+                reasons.append(f"📊 건전한 변동성 (RSI {rsi:.0f}) [+20점]")
+            elif rsi < 35:
+                score += 10
+                reasons.append(f"💧 과매도 구간 (반등 기대) [+10점]")
+            elif rsi > 70:
+                reasons.append(f"🔥 과열 구간 (조정 주의) [0점]")
             
-            # [등급 및 색상]
+            # [등급 판정]
             if score >= 80:
                 rec_text = "🦵 강력 무릎 (적극매수)"
                 rec_bg = "#d4edda"; rec_color = "#155724"
@@ -133,9 +158,8 @@ def analyze_stocks(stock_list):
                 rec_text = "❌ 관망 필요"
                 rec_bg = "#f8d7da"; rec_color = "#721c24"
 
-            # [가격 가이드 문자열 생성]
+            # [가격 정보]
             is_us = not (".KS" in ticker or ".KQ" in ticker)
-            
             if is_us:
                 p_curr = f"${curr_price:,.2f}"
                 p_stop = f"${curr_ma20:,.2f}"
@@ -149,7 +173,7 @@ def analyze_stocks(stock_list):
                 'ticker': ticker, 'name': names[ticker], 'score': score,
                 'rec_text': rec_text, 'rec_bg': rec_bg, 'rec_color': rec_color,
                 'price': p_curr, 'krw': p_krw, 'stop_price': p_stop,
-                'df': df, 'ma20': curr_ma20
+                'df': df, 'reasons': reasons # 이유 리스트 저장
             })
 
         except Exception: continue
@@ -201,7 +225,7 @@ def run_backtest(ticker, period="1y"):
     except: return None
 
 # ---------------------------------------------------------
-# 4. 화면 구성 (UI) - 안전장치 추가됨
+# 4. 화면 구성 (UI) - 점수 근거 표시 추가
 # ---------------------------------------------------------
 tab1, tab2 = st.tabs(["📊 자동 종목 스캔", "🧪 수익률 검증"])
 
@@ -212,12 +236,10 @@ with tab1:
     with col_opt2:
         top_n = st.selectbox("분석할 종목 수", [30, 50, 100], index=0)
 
-    # 데이터가 꼬였을 때를 대비해 세션 초기화 버튼 추가
+    # 새로고침 (데이터 초기화 포함)
     if st.button("🔍 종목 분석 및 타점 계산 (새로고침)", type="primary"):
-        # 기존 데이터 삭제 (에러 방지 핵심)
         if 'auto_results' in st.session_state:
             del st.session_state['auto_results']
-            
         stock_list = get_stock_list(market, top_n)
         st.session_state['auto_results'] = analyze_stocks(stock_list)
 
@@ -234,10 +256,17 @@ with tab1:
                 with c2:
                     st.markdown(f"""<div style="background-color:{item['rec_bg']}; color:{item['rec_color']}; padding:8px; border-radius:5px; text-align:center; font-weight:bold;">{item['rec_text']} ({item['score']}점)</div>""", unsafe_allow_html=True)
                 
+                # --- [추가된 부분] 점수 상세 내역 (펼치기) ---
+                with st.expander(f"💯 점수 산출 근거 보기 ({item['score']}점)"):
+                    if 'reasons' in item:
+                        for reason in item['reasons']:
+                            st.write(reason)
+                    else:
+                        st.write("상세 내역 없음")
+
                 st.markdown("---")
                 g1, g2, g3 = st.columns(3)
                 
-                # [수정됨] .get()을 사용하여 데이터가 없어도 에러가 나지 않게 처리
                 with g1:
                     st.metric("현재가 (매수)", item.get('price', '-'))
                     if item.get('krw'): st.caption(f"({item['krw']})")
@@ -253,9 +282,8 @@ with tab1:
                     df = item['df'][-60:]
                     fig, ax = plt.subplots(figsize=(8, 1.5))
                     ax.plot(df.index, df['Close'], color='black', label='주가')
-                    # ma20이 없으면 계산
                     ma20 = df['Close'].rolling(20).mean()
-                    ax.plot(df.index, ma20, color='green', lw=2, label='생명선(손절선)')
+                    ax.plot(df.index, ma20, color='green', lw=2, label='생명선')
                     ax.fill_between(df.index, df['Close'], ma20, color='green', alpha=0.1)
                     ax.legend(fontsize='small', loc='upper left')
                     ax.set_xticks([]); ax.set_yticks([])
