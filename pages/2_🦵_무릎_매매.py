@@ -23,7 +23,7 @@ except ImportError:
         plt.rc('font', family='NanumGothic')
 plt.rc('axes', unicode_minus=False)
 
-# [타이틀 고정]
+# [요청하신 고정 타이틀]
 st.title("🦵 무릎 매매 스캐너 ")
 st.caption("시가총액 상위 종목을 자동 분석하여 매매 타점을 제시합니다.")
 
@@ -101,14 +101,11 @@ def analyze_stocks(stock_list):
 
             if df.empty or len(df) < 60: continue
             
-            # [수정] 데이터 형태 안전장치 (Series 변환)
+            # 데이터 안전 변환
             if isinstance(df, pd.DataFrame):
-                if 'Close' in df.columns:
-                    close = df['Close']
-                else:
-                    continue
-            else:
-                close = df
+                if 'Close' in df.columns: close = df['Close']
+                else: continue
+            else: close = df
                 
             if close.isna().all(): continue
 
@@ -197,33 +194,20 @@ def analyze_stocks(stock_list):
     return results
 
 # ---------------------------------------------------------
-# 3. 백테스팅 함수 (에러 처리 강화)
+# 3. 백테스팅 함수
 # ---------------------------------------------------------
 def run_backtest(ticker, period="1y"):
-    """
-    백테스팅 함수: 에러 발생 시 원인을 출력하도록 수정됨
-    """
     try:
-        # 데이터 다운로드
         df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
         
-        # [수정] yfinance 컬럼 구조 이슈 해결 (MultiIndex 해제)
         if isinstance(df.columns, pd.MultiIndex):
-            try:
-                # Ticker 레벨이 있다면 제거 (예: ('Close', 'AAPL') -> 'Close')
-                df.columns = df.columns.droplevel(1) 
-            except:
-                pass
+            try: df.columns = df.columns.droplevel(1) 
+            except: pass
 
-        if df.empty:
-            st.error(f"❌ 데이터 다운로드 실패: {ticker} (데이터가 비어있음)")
-            return None
-            
-        if len(df) < 60:
-            st.error(f"⚠️ 데이터 부족: {len(df)}일치 데이터만 존재함 (최소 60일 필요)")
+        if df.empty or len(df) < 60:
+            st.error(f"❌ 데이터 부족: {ticker}")
             return None
         
-        # 지표 생성
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA60'] = df['Close'].rolling(60).mean()
         
@@ -234,34 +218,29 @@ def run_backtest(ticker, period="1y"):
             date = df.index[i]
             row = df.iloc[i]
             
-            # 현재 자산 평가
             close_price = float(row['Close'])
-            if in_position:
-                curr_equity = shares * close_price
-            else:
-                curr_equity = balance
+            if in_position: curr_equity = shares * close_price
+            else: curr_equity = balance
             equity_curve.append({'Date': date, 'Equity': curr_equity})
             
             ma20 = float(row['MA20'])
             ma60 = float(row['MA60'])
 
-            # 매도 로직: 20일선 이탈
+            # 매도 로직
             if in_position and close_price < ma20:
                 balance = shares * close_price
                 yield_rate = ((close_price - buy_price)/buy_price)*100
                 trade_log.append({'구분': '매도', '수익률': f"{yield_rate:.2f}%", '날짜': date})
                 shares = 0; in_position = False
             
-            # 매수 로직: 정배열 + 20일선 지지 + 눌림목(3% 이내)
+            # 매수 로직
             elif not in_position and ma20 > ma60 and close_price >= ma20 and close_price <= ma20*1.03:
                 buy_price = close_price
                 shares = balance / buy_price
                 balance = 0; in_position = True
                 trade_log.append({'구분': '매수', '수익률': '-', '날짜': date})
 
-        # 최종 수익률 계산
-        final_price = float(df['Close'].iloc[-1])
-        final_equity = shares * final_price if in_position else balance
+        final_equity = shares * df['Close'].iloc[-1] if in_position else balance
         total_ret = ((final_equity - 1000000)/1000000)*100
         
         wins = [1 for t in trade_log if t['구분']=='매도' and '-' not in t['수익률'] and float(t['수익률'][:-1]) > 0]
@@ -274,14 +253,11 @@ def run_backtest(ticker, period="1y"):
         }
 
     except Exception as e:
-        # [중요] 에러가 나면 여기서 화면에 뿌려줌
-        st.error(f"🚫 백테스팅 중 오류 발생: {str(e)}")
-        # 개발자 확인용 상세 로그 (필요시 주석 해제)
-        # st.write(df.head()) 
+        st.error(f"🚫 백테스팅 오류: {str(e)}")
         return None
 
 # ---------------------------------------------------------
-# 4. 화면 구성 (UI)
+# 4. 화면 구성 (UI) - 안전장치 적용됨
 # ---------------------------------------------------------
 tab1, tab2 = st.tabs(["📊 자동 종목 스캔", "🧪 수익률 검증"])
 
@@ -306,17 +282,19 @@ with tab1:
             with st.container(border=True):
                 c1, c2 = st.columns([3, 2])
                 with c1:
-                    st.markdown(f"### [{item['name']}]({item['link']})")
+                    # [에러 해결 핵심] 링크가 없으면 그냥 '#' 처리
+                    link = item.get('link', '#')
+                    st.markdown(f"### [{item['name']}]({link})")
                     st.caption(item['ticker'])
                 with c2:
                     st.markdown(f"""<div style="background-color:{item['rec_bg']}; color:{item['rec_color']}; padding:8px; border-radius:5px; text-align:center; font-weight:bold;">{item['rec_text']} ({item['score']}점)</div>""", unsafe_allow_html=True)
                 
-                with st.expander(f"💯 점수 상세 보기 ({len(item['reasons'])}개 항목)"):
-                    if item['reasons']:
+                with st.expander(f"💯 점수 상세 보기 ({len(item.get('reasons', []))}개 항목)"):
+                    if item.get('reasons'):
                         for r in item['reasons']:
                             st.write(r)
                     else:
-                        st.write("특이 사항 없음")
+                        st.write("상세 내역 없음")
 
                 st.markdown("---")
                 g1, g2, g3 = st.columns(3)
