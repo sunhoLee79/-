@@ -65,7 +65,7 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ---------------------------------------------------------
-# 2. 분석 로직 (매수가/손절가 계산 추가)
+# 2. 분석 로직
 # ---------------------------------------------------------
 def analyze_stocks(stock_list):
     results = []
@@ -138,7 +138,6 @@ def analyze_stocks(stock_list):
             
             if is_us:
                 p_curr = f"${curr_price:,.2f}"
-                # 손절가는 20일선 가격
                 p_stop = f"${curr_ma20:,.2f}"
                 p_krw = f"{curr_price * exchange_rate:,.0f}원"
             else:
@@ -202,7 +201,7 @@ def run_backtest(ticker, period="1y"):
     except: return None
 
 # ---------------------------------------------------------
-# 4. 화면 구성 (UI) - 가격 가이드 추가됨
+# 4. 화면 구성 (UI) - 안전장치 추가됨
 # ---------------------------------------------------------
 tab1, tab2 = st.tabs(["📊 자동 종목 스캔", "🧪 수익률 검증"])
 
@@ -213,7 +212,12 @@ with tab1:
     with col_opt2:
         top_n = st.selectbox("분석할 종목 수", [30, 50, 100], index=0)
 
-    if st.button("🔍 종목 분석 및 타점 계산", type="primary"):
+    # 데이터가 꼬였을 때를 대비해 세션 초기화 버튼 추가
+    if st.button("🔍 종목 분석 및 타점 계산 (새로고침)", type="primary"):
+        # 기존 데이터 삭제 (에러 방지 핵심)
+        if 'auto_results' in st.session_state:
+            del st.session_state['auto_results']
+            
         stock_list = get_stock_list(market, top_n)
         st.session_state['auto_results'] = analyze_stocks(stock_list)
 
@@ -223,7 +227,6 @@ with tab1:
         
         for item in results:
             with st.container(border=True):
-                # 헤더 섹션
                 c1, c2 = st.columns([3, 2])
                 with c1:
                     st.markdown(f"### {item['name']}")
@@ -231,29 +234,33 @@ with tab1:
                 with c2:
                     st.markdown(f"""<div style="background-color:{item['rec_bg']}; color:{item['rec_color']}; padding:8px; border-radius:5px; text-align:center; font-weight:bold;">{item['rec_text']} ({item['score']}점)</div>""", unsafe_allow_html=True)
                 
-                # --- [추가된 부분] 매매 가이드 섹션 ---
                 st.markdown("---")
                 g1, g2, g3 = st.columns(3)
+                
+                # [수정됨] .get()을 사용하여 데이터가 없어도 에러가 나지 않게 처리
                 with g1:
-                    st.metric("현재가 (매수)", item['price'])
-                    if item['krw']: st.caption(f"({item['krw']})")
+                    st.metric("현재가 (매수)", item.get('price', '-'))
+                    if item.get('krw'): st.caption(f"({item['krw']})")
                 with g2:
-                    st.metric("손절가 (20일선)", item['stop_price'])
+                    st.metric("손절가 (20일선)", item.get('stop_price', '계산중...'))
                     st.caption("이 가격 깨지면 매도")
                 with g3:
                     st.metric("목표 전략", "추세 추종 🚀")
                     st.caption("20일선 위면 계속 보유")
                 
                 # 차트 섹션
-                df = item['df'][-60:]
-                fig, ax = plt.subplots(figsize=(8, 1.5))
-                ax.plot(df.index, df['Close'], color='black', label='주가')
-                ax.plot(df.index, df['Close'].rolling(20).mean()[-60:], color='green', lw=2, label='생명선(손절선)')
-                ax.fill_between(df.index, df['Close'], df['Close'].rolling(20).mean()[-60:], color='green', alpha=0.1)
-                ax.legend(fontsize='small', loc='upper left')
-                ax.set_xticks([]); ax.set_yticks([])
-                for sp in ax.spines.values(): sp.set_visible(False)
-                st.pyplot(fig); plt.close(fig)
+                if 'df' in item and not item['df'].empty:
+                    df = item['df'][-60:]
+                    fig, ax = plt.subplots(figsize=(8, 1.5))
+                    ax.plot(df.index, df['Close'], color='black', label='주가')
+                    # ma20이 없으면 계산
+                    ma20 = df['Close'].rolling(20).mean()
+                    ax.plot(df.index, ma20, color='green', lw=2, label='생명선(손절선)')
+                    ax.fill_between(df.index, df['Close'], ma20, color='green', alpha=0.1)
+                    ax.legend(fontsize='small', loc='upper left')
+                    ax.set_xticks([]); ax.set_yticks([])
+                    for sp in ax.spines.values(): sp.set_visible(False)
+                    st.pyplot(fig); plt.close(fig)
 
 with tab2:
     if 'auto_results' in st.session_state and st.session_state['auto_results']:
