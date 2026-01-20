@@ -7,3 +7,4 @@ transformers
 torch
 finance-datareader
 plotly
+koreanize-matplotlib
