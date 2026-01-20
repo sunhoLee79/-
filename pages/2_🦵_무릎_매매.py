@@ -1,6 +1,6 @@
 import streamlit as st
 import yfinance as yf
-import FinanceDataReader as fdr # 종목 리스트 가져오기용
+import FinanceDataReader as fdr
 import pandas as pd
 import matplotlib.pyplot as plt
 import platform
@@ -23,40 +23,31 @@ except ImportError:
         plt.rc('font', family='NanumGothic')
 plt.rc('axes', unicode_minus=False)
 
-st.title("🦵 무릎 매매 스캐너 (Auto)")
-st.caption("시가총액 상위 종목을 자동으로 수집하여 '무릎(눌림목)'을 찾습니다.")
+st.title("🦵 무릎 매매 스캐너 ")
+st.caption("시가총액 상위 종목을 자동 분석하여 매매 타점을 제시합니다.")
 
 # ---------------------------------------------------------
-# 1. 데이터 수집 함수 (자동화 핵심)
+# 1. 데이터 수집 함수
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600)
 def get_stock_list(market_type, limit=30):
-    """
-    시장별 시가총액 상위 N개 종목 코드를 가져옵니다.
-    """
     if market_type == "KOSPI":
         df = fdr.StockListing('KOSPI')
-        # 우선주 제외, 상위 N개
-        df = df[~df['Code'].str.contains('50$|70$|75$|55$|60$')] # 우선주 등 필터링 대략
+        df = df[~df['Code'].str.contains('50$|70$|75$|55$|60$')]
         top_list = df.head(limit)
-        # yfinance용 티커로 변환 (005930 -> 005930.KS)
         return [(f"{row['Code']}.KS", row['Name']) for _, row in top_list.iterrows()]
-    
     elif market_type == "KOSDAQ":
         df = fdr.StockListing('KOSDAQ')
         top_list = df.head(limit)
         return [(f"{row['Code']}.KQ", row['Name']) for _, row in top_list.iterrows()]
-    
     elif market_type == "S&P500":
         df = fdr.StockListing('S&P500')
         top_list = df.head(limit)
         return [(row['Symbol'], row['Name']) for _, row in top_list.iterrows()]
-    
     elif market_type == "NASDAQ":
         df = fdr.StockListing('NASDAQ')
         top_list = df.head(limit)
         return [(row['Symbol'], row['Name']) for _, row in top_list.iterrows()]
-    
     return []
 
 @st.cache_data(ttl=3600)
@@ -74,21 +65,19 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 # ---------------------------------------------------------
-# 2. 분석 로직
+# 2. 분석 로직 (매수가/손절가 계산 추가)
 # ---------------------------------------------------------
 def analyze_stocks(stock_list):
     results = []
     exchange_rate = get_exchange_rate()
     
-    # 진행 상황 표시바
-    progress_text = "데이터 수집 및 분석 중입니다. 잠시만 기다려주세요..."
+    progress_text = "데이터 수집 및 정밀 분석 중... (매수가/손절가 계산)"
     my_bar = st.progress(0, text=progress_text)
     
     total = len(stock_list)
-    tickers = [item[0] for item in stock_list] # 티커만 추출
-    names = {item[0]: item[1] for item in stock_list} # 티커:이름 매핑
+    tickers = [item[0] for item in stock_list]
+    names = {item[0]: item[1] for item in stock_list}
 
-    # 데이터 한꺼번에 다운로드 (속도 향상)
     try:
         data = yf.download(tickers, period="1y", interval="1d", group_by='ticker', threads=True, progress=False, auto_adjust=True)
     except:
@@ -96,9 +85,7 @@ def analyze_stocks(stock_list):
         return []
 
     for i, ticker in enumerate(tickers):
-        # 진행바 업데이트
         my_bar.progress((i + 1) / total)
-        
         try:
             if len(tickers) == 1: df = data
             else: df = data[ticker] if ticker in data.columns.levels[0] else pd.DataFrame()
@@ -116,33 +103,28 @@ def analyze_stocks(stock_list):
             curr_ma60 = float(ma60.iloc[-1])
             prev_ma20 = float(ma20.iloc[-2])
             
-            # 이격도
             disparity = ((curr_price - curr_ma20) / curr_ma20) * 100
             
             score = 0
             
-            # [로직 1] 정배열 (Trend)
+            # [점수 로직]
             if curr_ma20 > curr_ma60: 
                 score += 30
                 if curr_ma20 > prev_ma20: score += 10
-            else:
-                score -= 20 # 역배열 감점
+            else: score -= 20
             
-            # [로직 2] 눌림목 위치 (Position)
             if curr_price >= curr_ma20:
-                if disparity <= 3.0: score += 40      # Golden Zone
-                elif disparity <= 6.0: score += 20    # Good Zone
-                else: score += 5                      # Too High
-            else:
-                score -= 30 # Broken Trend
+                if disparity <= 3.0: score += 40
+                elif disparity <= 6.0: score += 20
+                else: score += 5
+            else: score -= 30
                 
-            # [로직 3] RSI
             rsi = calculate_rsi(close).iloc[-1]
             if 30 <= rsi <= 60: score += 20
             
-            # 등급 판정
+            # [등급 및 색상]
             if score >= 80:
-                rec_text = "🦵 강력 무릎"
+                rec_text = "🦵 강력 무릎 (적극매수)"
                 rec_bg = "#d4edda"; rec_color = "#155724"
             elif score >= 50:
                 rec_text = "🤔 매수 관점"
@@ -151,30 +133,29 @@ def analyze_stocks(stock_list):
                 rec_text = "❌ 관망 필요"
                 rec_bg = "#f8d7da"; rec_color = "#721c24"
 
-            # 가격 처리
+            # [가격 가이드 문자열 생성]
             is_us = not (".KS" in ticker or ".KQ" in ticker)
+            
             if is_us:
-                price_str = f"${curr_price:,.2f}"
-                krw_price = f"{curr_price * exchange_rate:,.0f}원"
+                p_curr = f"${curr_price:,.2f}"
+                # 손절가는 20일선 가격
+                p_stop = f"${curr_ma20:,.2f}"
+                p_krw = f"{curr_price * exchange_rate:,.0f}원"
             else:
-                price_str = f"{curr_price:,.0f}원"
-                krw_price = ""
+                p_curr = f"{curr_price:,.0f}원"
+                p_stop = f"{curr_ma20:,.0f}원"
+                p_krw = ""
 
             results.append({
-                'ticker': ticker,
-                'name': names[ticker],
-                'score': score,
+                'ticker': ticker, 'name': names[ticker], 'score': score,
                 'rec_text': rec_text, 'rec_bg': rec_bg, 'rec_color': rec_color,
-                'price': price_str, 'krw': krw_price,
-                'disparity': disparity,
-                'df': df
+                'price': p_curr, 'krw': p_krw, 'stop_price': p_stop,
+                'df': df, 'ma20': curr_ma20
             })
 
         except Exception: continue
         
-    my_bar.empty() # 진행바 제거
-    
-    # 점수 높은 순 정렬
+    my_bar.empty()
     results.sort(key=lambda x: x['score'], reverse=True)
     return results
 
@@ -189,7 +170,7 @@ def run_backtest(ticker, period="1y"):
         df['MA20'] = df['Close'].rolling(20).mean()
         df['MA60'] = df['Close'].rolling(60).mean()
         
-        balance = 1000000; shares = 0; in_position = False
+        balance = 1000000; shares = 0; in_position = False; buy_price = 0
         trade_log = []; equity_curve = []
         
         for i in range(60, len(df)):
@@ -198,14 +179,12 @@ def run_backtest(ticker, period="1y"):
             curr_equity = balance + (shares * row['Close'])
             equity_curve.append({'Date': date, 'Equity': curr_equity})
             
-            # 매도 (20일선 이탈)
             if in_position and row['Close'] < row['MA20']:
                 balance += shares * row['Close']
                 yield_rate = ((row['Close'] - buy_price)/buy_price)*100
                 trade_log.append({'구분': '매도', '수익률': f"{yield_rate:.2f}%", '날짜': date})
                 shares = 0; in_position = False
             
-            # 매수 (정배열 + 지지 + 이격도 3% 이내)
             elif not in_position and row['MA20'] > row['MA60'] and row['Close'] >= row['MA20'] and row['Close'] <= row['MA20']*1.03:
                 buy_price = row['Close']
                 shares = balance / buy_price
@@ -223,7 +202,7 @@ def run_backtest(ticker, period="1y"):
     except: return None
 
 # ---------------------------------------------------------
-# 4. 화면 구성 (UI)
+# 4. 화면 구성 (UI) - 가격 가이드 추가됨
 # ---------------------------------------------------------
 tab1, tab2 = st.tabs(["📊 자동 종목 스캔", "🧪 수익률 검증"])
 
@@ -234,7 +213,7 @@ with tab1:
     with col_opt2:
         top_n = st.selectbox("분석할 종목 수", [30, 50, 100], index=0)
 
-    if st.button("🔍 상위 종목 자동 분석 시작", type="primary"):
+    if st.button("🔍 종목 분석 및 타점 계산", type="primary"):
         stock_list = get_stock_list(market, top_n)
         st.session_state['auto_results'] = analyze_stocks(stock_list)
 
@@ -244,22 +223,34 @@ with tab1:
         
         for item in results:
             with st.container(border=True):
-                c1, c2, c3 = st.columns([3, 2, 2])
+                # 헤더 섹션
+                c1, c2 = st.columns([3, 2])
                 with c1:
                     st.markdown(f"### {item['name']}")
                     st.caption(item['ticker'])
                 with c2:
-                    st.markdown(f"#### {item['price']}")
-                    if item['krw']: st.caption(f"({item['krw']})")
-                with c3:
-                    st.markdown(f"""<div style="background-color:{item['rec_bg']}; color:{item['rec_color']}; padding:8px; border-radius:5px; text-align:center; font-weight:bold;">{item['rec_text']}</div>""", unsafe_allow_html=True)
+                    st.markdown(f"""<div style="background-color:{item['rec_bg']}; color:{item['rec_color']}; padding:8px; border-radius:5px; text-align:center; font-weight:bold;">{item['rec_text']} ({item['score']}점)</div>""", unsafe_allow_html=True)
                 
-                # 미니 차트
+                # --- [추가된 부분] 매매 가이드 섹션 ---
+                st.markdown("---")
+                g1, g2, g3 = st.columns(3)
+                with g1:
+                    st.metric("현재가 (매수)", item['price'])
+                    if item['krw']: st.caption(f"({item['krw']})")
+                with g2:
+                    st.metric("손절가 (20일선)", item['stop_price'])
+                    st.caption("이 가격 깨지면 매도")
+                with g3:
+                    st.metric("목표 전략", "추세 추종 🚀")
+                    st.caption("20일선 위면 계속 보유")
+                
+                # 차트 섹션
                 df = item['df'][-60:]
                 fig, ax = plt.subplots(figsize=(8, 1.5))
-                ax.plot(df.index, df['Close'], color='black')
-                ax.plot(df.index, df['Close'].rolling(20).mean()[-60:], color='green', lw=2, label='20일선')
-                ax.legend(fontsize='small')
+                ax.plot(df.index, df['Close'], color='black', label='주가')
+                ax.plot(df.index, df['Close'].rolling(20).mean()[-60:], color='green', lw=2, label='생명선(손절선)')
+                ax.fill_between(df.index, df['Close'], df['Close'].rolling(20).mean()[-60:], color='green', alpha=0.1)
+                ax.legend(fontsize='small', loc='upper left')
                 ax.set_xticks([]); ax.set_yticks([])
                 for sp in ax.spines.values(): sp.set_visible(False)
                 st.pyplot(fig); plt.close(fig)
