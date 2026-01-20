@@ -1,6 +1,15 @@
 import streamlit as st
 
-st.title("🎈 My new app")
-st.write(
-    "Let's start building! For help and inspiration, head over to [docs.streamlit.io](https://docs.streamlit.io/)."
+st.set_page_config(
+    page_title="나만의 주식 비서",
+    page_icon="📈",
 )
+
+st.title("📈 나만의 주식 분석 대시보드")
+st.write("""
+### 환영합니다! 👋
+왼쪽 사이드바(메뉴)에서 원하는 기능을 선택하세요.
+
+* **🔥 실시간 급등주:** 지금 시장에서 가장 뜨거운 종목을 찾습니다.
+* **🦵 무릎 매매:** 안전하게 추세를 타고 오르는 종목을 발굴합니다.
+""")
