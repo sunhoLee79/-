@@ -8,3 +8,5 @@ torch
 finance-datareader
 plotly
 koreanize-matplotlib
+google-api-python-client
+pandas
