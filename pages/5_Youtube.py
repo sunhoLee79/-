@@ -2,96 +2,101 @@ import streamlit as st
 from googleapiclient.discovery import build
 import pandas as pd
 from googleapiclient.errors import HttpError
+from datetime import datetime, timedelta
 import json
 
-# 1. 설정 (보내주신 API 키 적용)
+# 설정
 API_KEY = 'AIzaSyDLY6YYLqiQ_8YXt5eGFUGIFYvzKaOi-Yk'
 youtube = build('youtube', 'v3', developerKey=API_KEY)
 
-st.set_page_config(page_title="유튜브 떡상 스캐너", layout="wide")
-st.title("🚀 1Day ENG: 인기 콘텐츠 벤치마킹 스캐너")
-st.caption("작은 채널에서 조회수가 폭발한 영상을 찾아 기획 의도를 분석합니다.")
+st.set_page_config(page_title="중소형 떡상 채널 스캐너", layout="wide")
+st.title("🎯 1Day ENG: 중소형 채널 벤치마킹 도구")
+st.caption("구독자가 적지만 조회수가 폭발 중인 '진짜 고수' 채널을 찾습니다.")
 
-# 사이드바 설정
 with st.sidebar:
-    st.header("🔍 검색 설정")
-    keyword = st.text_input("검색 키워드", "English Shorts")
-    max_results = st.slider("검색 개수", 10, 50, 20)
-    st.info("기획 점수 = 조회수 / 구독자 수\n1.0 이상이면 성과가 좋은 영상입니다.")
+    st.header("⚙️ 필터 설정")
+    keyword = st.text_input("검색 키워드", "영어회화 shorts")
+    max_results = st.slider("검색 개수", 10, 50, 30)
+    
+    # 구독자 상한선 설정 (대형 채널 제외)
+    sub_limit = st.number_input("구독자 수 상한선 (이하만 표시)", value=100000, step=10000)
+    
+    # 검색 기간 설정 (최근 영상 위주)
+    days_back = st.slider("며칠 이내 영상?", 7, 90, 30)
+    published_after = (datetime.utcnow() - timedelta(days=days_back)).isoformat() + "Z"
 
-if st.button("분석 시작"):
+if st.button("신규 트렌드 분석 시작"):
     try:
-        with st.spinner('유튜브 데이터를 정밀 분석 중입니다...'):
-            # 1. 검색 API 호출
+        with st.spinner('대형 채널을 제외하고 분석 중...'):
+            # 1. 최신순/조회수순으로 검색
             search_response = youtube.search().list(
                 q=keyword,
                 part='snippet',
                 maxResults=max_results,
                 type='video',
-                regionCode='KR'
+                publishedAfter=published_after, # 최근 영상만
+                order='viewCount' # 조회수 높은 순으로 일단 가져옴
             ).execute()
 
             video_ids = [item['id']['videoId'] for item in search_response['items']]
             channel_ids = [item['snippet']['channelId'] for item in search_response['items']]
 
-            # 2. 영상 통계 정보 한 번에 가져오기 (할당량 절약)
+            # 2. 영상 및 채널 정보 일괄 호출
             video_response = youtube.videos().list(
                 part='statistics,snippet',
                 id=','.join(video_ids)
             ).execute()
 
-            # 3. 채널 정보(구독자 수) 한 번에 가져오기
             channel_response = youtube.channels().list(
                 part='statistics',
-                id=','.join(list(set(channel_ids))) # 중복 채널 제거
+                id=','.join(list(set(channel_ids)))
             ).execute()
 
-            # 채널 구독자 수 매핑 딕셔너리 생성
-            channel_subs = {item['id']: int(item['statistics'].get('subscriberCount', 1)) for item in channel_response['items']}
+            channel_info = {
+                item['id']: {
+                    'subs': int(item['statistics'].get('subscriberCount', 1)),
+                    'title': item['snippet']['title']
+                } for item in channel_response['items']
+            }
 
             video_data = []
             for v in video_response['items']:
-                v_id = v['id']
                 c_id = v['snippet']['channelId']
-                title = v['snippet']['title']
-                view_count = int(v['statistics'].get('viewCount', 0))
-                sub_count = channel_subs.get(c_id, 1)
+                sub_count = channel_info.get(c_id, {}).get('subs', 1)
                 
-                # 기획 점수 계산
-                score = round((view_count / sub_count), 2)
-                
-                video_data.append({
-                    "기획 점수": score,
-                    "제목": title,
-                    "조회수": f"{view_count:,}",
-                    "구독자 수": f"{sub_count:,}",
-                    "링크": f"https://youtu.be/{v_id}"
-                })
+                # 설정한 구독자 상한선보다 적은 채널만 포함
+                if sub_count <= sub_limit:
+                    v_id = v['id']
+                    title = v['snippet']['title']
+                    view_count = int(v['statistics'].get('viewCount', 0))
+                    score = round((view_count / sub_count), 2)
+                    
+                    video_data.append({
+                        "기획 점수": score,
+                        "채널명": channel_info.get(c_id, {}).get('title'),
+                        "제목": title,
+                        "조회수": view_count,
+                        "구독자 수": sub_count,
+                        "링크": f"https://youtu.be/{v_id}"
+                    })
 
-            # 데이터프레임 출력
             df = pd.DataFrame(video_data)
             if not df.empty:
-                # 점수 높은 순 정렬
                 df = df.sort_values(by="기획 점수", ascending=False)
                 
-                # 테이블 출력
-                st.dataframe(
-                    df, 
-                    column_config={
-                        "링크": st.column_config.LinkColumn("영상 링크")
-                    },
-                    use_container_width=True,
-                    hide_index=True
-                )
+                # 가독성을 위해 포맷팅
+                display_df = df.copy()
+                display_df['조회수'] = display_df['조회수'].apply(lambda x: f"{x:,}")
+                display_df['구독자 수'] = display_df['구독자 수'].apply(lambda x: f"{x:,}")
                 
-                st.success(f"✅ 분석 완료! 총 {len(df)}개의 영상을 분석했습니다.")
+                st.dataframe(
+                    display_df,
+                    column_config={"링크": st.column_config.LinkColumn("영상 링크")},
+                    use_container_width=True, hide_index=True
+                )
+                st.success(f"✅ 구독자 {sub_limit:,}명 이하 채널의 영상 {len(df)}개를 찾았습니다.")
             else:
-                st.warning("검색 결과가 없습니다.")
+                st.warning("조건에 맞는 채널이 없습니다. 구독자 상한선을 높이거나 검색어를 바꿔보세요.")
 
     except HttpError as e:
-        error_msg = json.loads(e.content.decode())['error']['message']
-        st.error(f"❌ YouTube API 에러: {error_msg}")
-        if "quotaExceeded" in error_msg:
-            st.warning("오늘 사용할 수 있는 API 할당량을 모두 소진했습니다. 내일 다시 시도해주세요.")
-    except Exception as e:
-        st.error(f"알 수 없는 오류 발생: {e}")
+        st.error(f"API 에러: {json.loads(e.content.decode())['error']['message']}")
