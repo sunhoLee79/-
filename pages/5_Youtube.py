@@ -3,7 +3,7 @@ from googleapiclient.discovery import build
 import pandas as pd
 
 # 1. 설정 (본인의 API 키를 입력하세요)
-API_KEY = '여기에_발급받은_API_키를_입력하세요'
+API_KEY = 'AIzaSyDLY6YYLqiQ_8YXt5eGFUGIFYvzKaOi-Yk'
 youtube = build('youtube', 'v3', developerKey=API_KEY)
 
 st.set_page_config(page_title="유튜브 떡상 스캐너", layout="wide")
