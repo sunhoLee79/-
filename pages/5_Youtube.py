@@ -6,30 +6,36 @@ from datetime import datetime, timedelta
 import json
 from collections import Counter
 
-# 설정
-API_KEY = 'AIzaSyDLY6YYLqiQ_8YXt5eGFUGIFYvzKaOi-Yk' # 본인의 API 키로 교체 권장
+# 설정 (API 키는 보안을 위해 환경변수 사용을 권장합니다)
+API_KEY = 'AIzaSyDLY6YYLqiQ_8YXt5eGFUGIFYvzKaOi-Yk'
 youtube = build('youtube', 'v3', developerKey=API_KEY)
 
 st.set_page_config(page_title="Shorts 머무름 분석기", layout="wide")
 st.title("📊 쇼츠 시청 상황 & 주제 분석기")
-st.caption("시청자가 끝까지 머물러 '반응'을 남긴 고효율 쇼츠를 분석합니다.")
+st.caption("복잡한 설정 없이 키워드만 입력하세요. '머무름 점수'가 높은 영상을 바로 찾아드립니다.")
 
-with st.sidebar:
-    st.header("⚙️ 분석 필터")
-    keyword = st.text_input("분석할 주제 키워드", "shorts")
-    days_back = st.slider("최근 며칠 이내?", 1, 60, 14)
-    sub_limit = st.number_input("채널 규모 상한 (구독자)", value=50000)
-    max_results = st.slider("수집 데이터 양", 10, 50, 30)
-    published_after = (datetime.utcnow() - timedelta(days=days_back)).isoformat() + "Z"
+# 필터를 없애는 대신 내부적으로 최적의 값을 기본 적용합니다.
+DEFAULT_DAYS = 14          # 최근 2주일 이내 영상
+DEFAULT_SUB_LIMIT = 100000 # 구독자 10만 이하 (중소형 채널)
+DEFAULT_MAX_RESULTS = 50   # 최대 50개 분석
 
-if st.button("시청 머무름 데이터 분석 시작"):
+# 메인 화면에 검색창만 배치
+keyword = st.text_input("분석하고 싶은 주제를 입력하세요", placeholder="예: 캠핑, 요리꿀팁, 자취생, mbti")
+
+if st.button("즉시 분석 시작"):
+    if not keyword:
+        st.warning("검색어를 입력해 주세요.")
+        st.stop()
+        
     try:
-        with st.spinner('고유지율 예상 영상을 추출 중입니다...'):
-            # 1. 쇼츠 위주 검색 (videoDuration='short'는 4분 미만이나 보통 쇼츠가 잡힘)
+        published_after = (datetime.utcnow() - timedelta(days=DEFAULT_DAYS)).isoformat() + "Z"
+        
+        with st.spinner(f"'{keyword}' 관련 고유지율 데이터를 수집 중입니다..."):
+            # 1. 쇼츠 위주 검색
             search_response = youtube.search().list(
                 q=keyword,
                 part='snippet',
-                maxResults=max_results,
+                maxResults=DEFAULT_MAX_RESULTS,
                 type='video',
                 videoDuration='short', 
                 publishedAfter=published_after,
@@ -39,9 +45,9 @@ if st.button("시청 머무름 데이터 분석 시작"):
             video_ids = [item['id']['videoId'] for item in search_response['items']]
             channel_ids = [item['snippet']['channelId'] for item in search_response['items']]
 
-            # 2. 영상 상세 통계 (좋아요, 댓글 포함)
+            # 2. 영상 상세 통계
             video_response = youtube.videos().list(
-                part='statistics,snippet,contentDetails',
+                part='statistics,snippet',
                 id=','.join(video_ids)
             ).execute()
 
@@ -60,22 +66,20 @@ if st.button("시청 머무름 데이터 분석 시작"):
             all_titles = ""
 
             for v in video_response.get('items', []):
-                # 진짜 쇼츠(60초 이하)만 필터링 로직 (ISO 8601 duration 분석은 생략, API 기본값 활용)
                 stats = v.get('statistics', {})
                 snippet = v.get('snippet', {})
                 c_id = snippet.get('channelId')
                 c_data = channel_info.get(c_id, {'subs': 1, 'title': '알 수 없음'})
                 
-                if c_data['subs'] <= sub_limit:
+                # 내부 설정된 구독자 수 제한 적용
+                if c_data['subs'] <= DEFAULT_SUB_LIMIT:
                     views = int(stats.get('viewCount', 0))
                     likes = int(stats.get('likeCount', 0))
                     comments = int(stats.get('commentCount', 0))
                     subs = c_data['subs'] if c_data['subs'] > 0 else 1
                     
-                    # 지표 계산
-                    # 1. 기획력(조회수/구독자): 얼마나 외부 노출이 잘 되었는가
+                    # 기획력 및 머무름 지표 계산
                     planning_score = round(views / subs, 2)
-                    # 2. 머무름 지표(상호작용/조회수): 얼마나 끝까지 보고 반응했는가
                     engagement_rate = round(((likes + comments) / views) * 100, 2) if views > 0 else 0
                     
                     video_data.append({
@@ -83,7 +87,6 @@ if st.button("시청 머무름 데이터 분석 시작"):
                         "기획 점수": planning_score,
                         "제목": snippet.get('title'),
                         "조회수": views,
-                        "좋아요": likes,
                         "채널명": c_data['title'],
                         "링크": f"https://youtu.be/{v['id']}"
                     })
@@ -91,15 +94,13 @@ if st.button("시청 머무름 데이터 분석 시작"):
 
             if video_data:
                 df = pd.DataFrame(video_data)
-                # 머무름 점수(Engagement) 순으로 정렬
                 df = df.sort_values(by="머무름 점수", ascending=False)
 
-                # 결과 출력
-                st.subheader("🔝 끝까지 보게 만든 '상황' 리스트 (머무름 점수 순)")
-                st.write("※ 머무름 점수: 조회수 대비 좋아요와 댓글의 비중 (높을수록 몰입도가 높음)")
+                st.subheader("🔝 시청자가 오래 머문 상황 리스트")
                 
                 display_df = df.copy()
                 display_df['조회수'] = display_df['조회수'].apply(lambda x: f"{x:,}")
+                
                 st.dataframe(
                     display_df,
                     column_config={"링크": st.column_config.LinkColumn("영상 확인")},
@@ -107,18 +108,18 @@ if st.button("시청 머무름 데이터 분석 시작"):
                     hide_index=True
                 )
 
-                # 상황 키워드 분석 (간이)
+                # 상황 키워드 분석
                 st.divider()
-                st.subheader("💡 이 영상들이 공통적으로 사용한 '상황' 키워드")
+                st.subheader("💡 분석된 영상들의 공통 상황 키워드")
                 words = [w for w in all_titles.split() if len(w) > 1]
                 top_words = Counter(words).most_common(10)
                 
                 cols = st.columns(5)
                 for i, (word, count) in enumerate(top_words):
-                    cols[i%5].metric(f"순위 {i+1}", word, f"{count}회 언급")
+                    cols[i%5].metric(f"{i+1}위 키워드", word, f"{count}회 사용")
 
             else:
-                st.warning("분석 조건에 맞는 영상이 없습니다.")
+                st.warning("분석 결과가 없습니다. 다른 키워드를 입력해 보세요.")
 
     except Exception as e:
-        st.error(f"오류 발생: {e}")
+        st.error(f"데이터를 가져오는 중 오류가 발생했습니다: {e}")
